@@ -158,60 +158,62 @@ public final class Main implements Runnable {
     @Override
     public void run() {
         for(;;) {
-            if(isPaused)
-                break;
-            Client client = null;
-            try {
-                 Socket socket = serverSocket.accept();
-                 client = new Client(socket);
-            } catch(IOException ex) {
-                if(!(ex instanceof SocketTimeoutException))
-                    destroy();
-            }     
-            if(client != null) {   
-                client.requestTimeout = System.currentTimeMillis() + 5000L;
-                synchronized(clientQueue) {
-                    clientQueue.add(client);
-                }
-            }   
-            Client firstClient = null;
-            for(int i = 0; i < 10; i++) {
-                client = clientQueue.poll();
-                if(client == null)
+            synchronized(this) {
+                if(isPaused)
                     break;
-                if(firstClient == null)
-                    firstClient = client;
-                else if(firstClient != client) {
-                    clientQueue.addLast(client);
-                    break;
-                }
-                if(client.requestId < 0) {
-                    client.requestId = getRequestId(client);
+                Client client = null;
+                try {
+                     Socket socket = serverSocket.accept();
+                     client = new Client(socket);
+                } catch(IOException ex) {
+                    if(!(ex instanceof SocketTimeoutException))
+                        destroy();
+                }     
+                if(client != null) {   
+                    client.requestTimeout = System.currentTimeMillis() + 5000L;
+                    synchronized(clientQueue) {
+                        clientQueue.add(client);
+                    }
+                }   
+                Client firstClient = null;
+                for(int i = 0; i < 10; i++) {
+                    client = clientQueue.poll();
+                    if(client == null)
+                        break;
+                    if(firstClient == null)
+                        firstClient = client;
+                    else if(firstClient != client) {
+                        clientQueue.addLast(client);
+                        break;
+                    }
+                    if(client.requestId < 0) {
+                        client.requestId = getRequestId(client);
+                        if(client.requestId >= 0) {
+                            client.requestTimeout = -1L;
+                        } else if(client.requestTimeout < System.currentTimeMillis()) {
+                            LOGGER.log(Level.SEVERE, "Request timeout!");
+                            client.destroy();
+                            continue;
+                        }
+                    }
                     if(client.requestId >= 0) {
-                        client.requestTimeout = -1L;
-                    } else if(client.requestTimeout < System.currentTimeMillis()) {
-                        LOGGER.log(Level.SEVERE, "Request timeout!");
-                        client.destroy();
-                        continue;
+                        int write = archiveSizes[client.requestId] - client.offset;
+                        if(write > BLOCK_SIZE)
+                            write = BLOCK_SIZE;
+                        try {
+                            client.outputStream.write(archiveBuffers[client.requestId].get(client.offset, write), 0, write);
+                        } catch(Exception ex) {
+                            LOGGER.log(Level.SEVERE, "Error : {0}", ex);
+                            continue;
+                        }
+                        client.offset += write;
+                        if(client.offset == archiveSizes[client.requestId]) {
+                            client.destroy();
+                            continue;
+                        }
                     }
+                    clientQueue.addLast(client);
                 }
-                if(client.requestId >= 0) {
-                    int write = archiveSizes[client.requestId] - client.offset;
-                    if(write > BLOCK_SIZE)
-                        write = BLOCK_SIZE;
-                    try {
-                        client.outputStream.write(archiveBuffers[client.requestId].get(client.offset, write), 0, write);
-                    } catch(Exception ex) {
-                        LOGGER.log(Level.SEVERE, "Error : {0}", ex);
-                        continue;
-                    }
-                    client.offset += write;
-                    if(client.offset == archiveSizes[client.requestId]) {
-                        client.destroy();
-                        continue;
-                    }
-                }
-                clientQueue.addLast(client);
             }
         }
     }
